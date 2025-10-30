@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Wandelzoektocht Aalst – Web</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <meta name="theme-color" content="#ffffff" />
+  <style>
+    .img-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; }
+    @media (min-width: 640px) { .img-grid { grid-template-columns: repeat(3, 1fr); } }
+    img.photo { width: 100%; height: auto; border-radius: .75rem; display: block; }
+    .thumb { width: 88px; height: 56px; object-fit: cover; border-radius: .5rem; border: 1px solid #e5e7eb; }
+    .thumb.sel { outline: 2px solid #6366f1; }
+    .thumb-row { display: flex; gap: .5rem; overflow-x: auto; padding-bottom: .5rem; }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useEffect, useMemo, useState } = React;
+
+    // Adjust if API server runs on another origin:
+    const API_BASE = ""; // same origin. Example: "https://jouwdomein.tld"
+    const STORAGE_KEY = "zoektocht-web-v1"; // local cache per apparaat
+
+    function api(path, opts) {
+      return fetch((API_BASE || "") + path, opts);
+    }
+
+    function normalize(s) {
+      return (s || "").toString().trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    }
+
+    const RAW_STEPS = [
+      { key: "station-start", title: "Start – Station Aalst (‘Kasteelgevel’)", area: "Stationsplein", mapQuery: "Station Aalst gevel zuilen", content: "Welkom! We starten aan het station. Bekijk de ‘kasteelgevel’ en tel de volwaardige natuurstenen zuilen aan de voorzijde.", question: "Hoeveel zuilen tel je?", type: "text", answer: null },
+      { key: "peperstraat", title: "Utopia & Peperstraat – Kleurrijke gevelrij", area: "Utopiaplein / Peperstraat", mapQuery: "Utopia Aalst Peperstraat kleurrijke huizen", content: "Utopia (2018) huisvest bib en academie. In de Peperstraat staat een rij kleurrijke gevels.", question: "Welke kleuren hebben de 5 huisgevels – van links naar rechts?", type: "text", answer: null, allowFreeNote: true },
+      { key: "vredeplein", title: "Vredeplein – Standbeeld ‘gesneuvelden’", area: "Vredeplein", mapQuery: "Vredeplein Aalst oorlogsmonument", content: "Monument voor burgerlijke slachtoffers WOI & WOII.", question: "Op welke datum werd het oorlogsmonument ingehuldigd?", type: "text", answer: null },
+      { key: "dialect", title: "Aalsters dialect – ‘Ajuinen’", area: "Richting Keizersplein", mapQuery: "Keizersplein Aalst", content: "‘Ajoin’ is een erenaam. Vertaal enkele woorden naar het Nederlands.", question: "Vertaal: A) GETAUKEN  B) MALONJIG  C) PARIK", type: "text", answer: null, allowFreeNote: true },
+      { key: "keizersplein", title: "Keizersplein – Koning Boudewijn", area: "Keizersplein", mapQuery: "Keizersplein Aalst standbeelden Astrid Boudewijn", content: "Kies het juiste aantal dagen dat koning Boudewijn regeerde.", question: "Hoeveel dagen?", type: "choice", options: ["15534", "15354", "15435", "15453", "15345"], answer: "15354" },
+      { key: "vlaaien", title: "Aalsterse vlaaien – Erkend streekproduct", area: "Korte/Lange Zoutstraat", mapQuery: "Aalsterse vlaai mastellen ingrediënten", content: "Kies de correcte ingrediënten.", question: "Met welke ingrediënten worden Aalsterse vlaaien gemaakt?", type: "choice", options: ["A) Melk, suiker, eieren, kandijsiroop, kaneel, foelie en mastellen", "B) Melk, suiker, eieren, speculaas en mastellen", "C) Melk, bloem, eieren, speculaas, Luikse siroop en mastellen"], answer: "A) Melk, suiker, eieren, kandijsiroop, kaneel, foelie en mastellen" },
+      { key: "levionois", title: "Louis D'Haeseleerstraat – Ingang Levionois", area: "Louis D'Haeseleerstraat / Ingang Levionois", mapQuery: "Ingang Levionois Aalst beluik cite", content: "Vroeger woonden fabrieksarbeiders in kleine huisjes (gehuurd van de fabriekseigenaar).", question: "Hoe noem je deze verzameling kleine huisjes? (meerdere benamingen mogelijk)", type: "text", answer: ["beluik", "beluiken", "cite", "cité", "citeetje"], validate: (input) => ["beluik", "beluiken", "cite", "cité", "citeetje"].some((w) => normalize(input) === w || normalize(input).includes(w)) },
+      { key: "kerkstraat", title: "Kerkstraat – Geboorteplaats Priester Daens", area: "Kerkstraat", mapQuery: "Kerkstraat Aalst geboorteplaats Daens 11", content: "Volgens de gevelplaat bevindt de geboorteplaats zich in de Kerkstraat.", question: "Aan welk huisnummer staat deze geboorteplaats?", type: "text", answer: "11", validate: (input) => normalize(input).replace(/[^0-9]/g, "") === "11" },
+      { key: "sintmartinus", title: "Sint‑Martinuskerk – Schilderij Sint‑Rochus", area: "Sint‑Martinuskerk", mapQuery: "Sint-Martinuskerk Aalst schilderij Sint-Rochus patroon pestlijders", content: "In de rechterzijbeuk hangt ‘Christus stelt Sint‑Rochus aan als patroon van de pestlijders’.", question: "Wie schilderde dit werk?", type: "text", answer: null },
+      { key: "gasthuys", title: "’t Gasthuys – Stedelijk Museum Aalst", area: "’t Gasthuys / Stedelijk Museum", mapQuery: "'t Gasthuys Stedelijk Museum Aalst bekende Aalstenaars standbeeld", content: "In het museum ontdek je Aalsts DNA. Naast Dirk Martens, Daens en Louis Paul Boon:", question: "Wie is de andere bekende Aalstenaar (met standbeeld te zien door het raam)?", type: "text", answer: null },
+      { key: "werf-daens", title: "Werfplein – Standbeeld Priester Daens", area: "Werfplein", mapQuery: "Standbeeld Priester Daens Werfplein Aalst", content: "Priester Adolf Daens streed voor sociale hervormingen.", question: "Welke bekende Vlaamse acteur speelde Priester Daens in de film (1992)?", type: "text", answer: "jan decleir", validate: (input) => normalize(input).includes("jan") && normalize(input).includes("decleir") },
+      { key: "ac-lamellen", title: "Werfplein – Administratief Centrum (lamellen)", area: "Werfplein 9", mapQuery: "Administratief Centrum Aalst Werfplein 9", content: "Frontaal voor het AC: tel de rode lamellen aan de voorgevel.", question: "Hoeveel rode lamellen tel je?", type: "text", answer: null },
+      { key: "hoveniers-hand", title: "Hoveniersplein – Monument ‘De onbekende troon’ (hand)", area: "Hoveniersplein", mapQuery: "Hoveniersplein Aalst onbekende troon", content: "Mozaïek-hand als troon: elk steentje staat symbool voor vrijwilligers wereldwijd.", question: "Door wie werd dit monument ontworpen?", type: "text", answer: null },
+      { key: "carnavalswerkhallen", title: "Carnavalswerkhallen – Graffitiwand", area: "Hoveniersdreef / Carnavalswerkhallen", mapQuery: "Carnavalswerkhallen Aalst", content: "Rond carnaval wordt elk jaar een stuk van de graffitiwand vernieuwd onder coördinatie van een Aalsterse kunstenaar.", question: "Wat is de naam van de coördinerende graffiti‑kunstenaar?", type: "text", answer: null },
+      { key: "sintannabrug", title: "Sint‑Annabrug – Escargotskraam", area: "Sint‑Annabrug", mapQuery: "Sint-Annabrug Aalst escargots", content: "Dagelijkse delicatesse aan het alikruikkraam (kleine gekookte slakjes met kruiden).", question: "Hoe heet deze lekkernij in de Aalsterse volksmond?", type: "text", answer: "alikruiken", validate: (input) => normalize(input).includes("alikruik") },
+      { key: "grote-markt", title: "Grote Markt – Oud Schepenhuis & Belfort", area: "Grote Markt", mapQuery: "Grote Markt Aalst Belfort", content: "Op de voorgevel staat ‘NEC SPE, NEC METU’.", question: "Wat betekent ‘NEC SPE, NEC METU’?", type: "text", answer: "zonder hoop, zonder vrees", validate: (input) => normalize(input).includes("zonder hoop") && normalize(input).includes("zonder vrees"), note: "Antwoord in het NL (bv. ‘Zonder hoop, zonder vrees’)." },
+      { key: "molenstraat", title: "Molenstraat – Oud toerismekantoor (refuge Ninove)", area: "Molenstraat", mapQuery: "Molenstraat Aalst toerismekantoor refuge Ninove", content: "In dit historisch pand (refuge abdij van Ninove) zat tot 2014 het infokantoor voor toerisme.", question: "Op welk huisnummer vind je dit pand?", type: "text", answer: null },
+      { key: "station-end", title: "Eindpunt – Terug aan Station Aalst", area: "Stationsplein", mapQuery: "Station Aalst", content: "Proficiat! Je bent terug aan het station. Dit is het eindpunt van de zoektocht.", question: "Geen vraag – klik ‘Afronden’ om je antwoorden te bekijken en eventueel te verzenden.", type: "text", answer: "" },
+    ];
+    const STEPS = RAW_STEPS.map((s, i) => ({ id: i + 1, photos: [], ...s }));
+
+    function useDebouncedEffect(effect, deps, delay) {
+      useEffect(() => {
+        const handler = setTimeout(() => effect(), delay);
+        return () => clearTimeout(handler);
+      }, [...(deps || []), delay]);
+    }
+
+    function ProgressBar({ value, total }) {
+      const pct = Math.round((value / total) * 100);
+      return (
+        <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+          <div className="h-2 rounded-full" style={{ width: pct + "%", background: "linear-gradient(90deg, rgba(16,185,129,1) 0%, rgba(59,130,246,1) 100%)" }} />
+          <div className="text-xs text-gray-600 mt-1">{pct}% voltooid</div>
+        </div>
+      );
+    }
+
+    function PhotoPicker({ onUploaded }) {
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState(null);
+
+      const onChange = async (e) => {
+        const files = Array.from(e.target.files || []);
+        if (!files.length) return;
+        setBusy(true);
+        setError(null);
+        try {
+          const pid = localStorage.getItem(STORAGE_KEY + ":pid");
+          if (!pid) throw new Error("Geen participantId.");
+          const form = new FormData();
+          files.forEach(f => form.append('photos', f));
+          const r = await api(`/api/upload/${pid}`, { method: 'POST', body: form });
+          if (!r.ok) throw new Error("Upload mislukt");
+          const data = await r.json();
+          onUploaded(data.uploaded || []);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setBusy(false);
+          e.target.value = "";
+        }
+      };
+
+      return (
+        <div className="flex items-center gap-2">
+          <label className={"text-sm px-3 py-2 rounded-lg border " + (busy ? "opacity-60 pointer-events-none" : "cursor-pointer hover:bg-gray-50")}>
+            <input type="file" multiple accept="image/*" className="hidden" onChange={onChange} />
+            Foto's uploaden
+          </label>
+          {error && <span className="text-xs text-red-600">{error}</span>}
+        </div>
+      );
+    }
+
+    function StepCard({ step, value, onChange, onNext, onPrev, isLast, displayIndex, editPhotos, onAddPhotos, onTogglePhoto, onReorderPhoto }) {
+      const [touched, setTouched] = useState(false);
+      const canValidate = !!step.answer && (step.type === "text" || step.type === "choice");
+      const isCorrect = (() => {
+        if (!canValidate) return null;
+        if (Array.isArray(step.answer)) {
+          const v = normalize(value);
+          return step.answer.some((a) => v.includes(normalize(a)));
+        }
+        if (step.validate) return step.validate(value);
+        return normalize(value) === normalize(step.answer);
+      })();
+
+      const selected = step.photos || [];
+
+      return (
+        <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold">{step.title}</h2>
+              {step.area && <p className="text-sm text-gray-600 mt-1">📍 {step.area}</p>}
+            </div>
+            <span className="text-xs text-white bg-indigo-600 rounded-full px-2 py-1">Stap {displayIndex + 1}</span>
+          </div>
+
+          <p className="mt-3 text-gray-800 leading-relaxed">{step.content}</p>
+          {step.mapQuery && (
+            <a className="inline-block mt-3 text-sm underline" href={"https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(step.mapQuery)} target="_blank" rel="noreferrer">Open kaart</a>
+          )}
+
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">{step.question}</label>
+            {step.type === "choice" ? (
+              <div className="grid gap-2">
+                {step.options?.map((opt) => (
+                  <label key={opt} className={"flex items-center justify-between border rounded-xl px-3 py-2 cursor-pointer " + (normalize(value)===normalize(opt) ? "border-indigo-500 ring-1 ring-indigo-300" : "border-gray-200")}>
+                    <span className="text-sm">{opt}</span>
+                    <input type="radio" name={"q-" + step.id} className="ml-3" checked={normalize(value) === normalize(opt)} onChange={() => onChange(opt)} />
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <input value={value || ""} onChange={(e) => onChange(e.target.value)} onBlur={() => setTouched(true)} placeholder="Typ je antwoord…" className="w-full border border-gray-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            )}
+
+            {canValidate && touched && value && (
+              <p className={"mt-2 text-sm font-medium " + (isCorrect ? "text-green-600" : "text-amber-600")}>
+                {isCorrect ? "Juist!" : "Dit controleer je best ter plaatse of herformuleer licht (spelling/taal)."}
+              </p>
+            )}
+          </div>
+
+          <div className="mt-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Foto’s voor deze stap</h3>
+              {editPhotos && <PhotoPicker onUploaded={(urls) => onAddPhotos(urls)} />}
+            </div>
+            {selected.length ? (
+              <div className="img-grid mt-2">
+                {selected.map((url, k) => (
+                  <figure key={k}>
+                    <img className="photo" src={url} loading="lazy" alt={"Foto " + (k+1)} />
+                    {editPhotos && (
+                      <figcaption className="flex gap-2 mt-1 text-xs">
+                        <button className="border rounded px-2 py-0.5" onClick={() => onReorderPhoto(url, -1)}>‹</button>
+                        <button className="border rounded px-2 py-0.5" onClick={() => onReorderPhoto(url, +1)}>›</button>
+                        <button className="border rounded px-2 py-0.5" onClick={() => onTogglePhoto(url)}>Verwijderen</button>
+                      </figcaption>
+                    )}
+                  </figure>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500 mt-1">Nog geen foto’s gekoppeld.</p>
+            )}
+          </div>
+
+          <div className="mt-6 flex items-center justify-between gap-2">
+            <button onClick={onPrev} className="px-4 py-2 rounded-xl border border-gray-300 hover:bg-gray-50" disabled={displayIndex === 0}>Vorige</button>
+            <div className="flex items-center gap-3">
+              {step.mapQuery && (
+                <a className="px-3 py-2 rounded-xl border border-gray-300 hover:bg-gray-50 text-sm" href={"https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(step.mapQuery)} target="_blank" rel="noreferrer">Kaart</a>
+              )}
+              <button onClick={onNext} className="px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700">
+                {isLast ? "Afronden" : "Volgende"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Header({ progress, total, onReset, editPhotos, setEditPhotos, name }) {
+      return (
+        <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
+          <div className="max-w-3xl mx-auto px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h1 className="text-lg font-semibold">Aalst Wandelzoektocht</h1>
+                <p className="text-xs text-gray-600">Start & einde aan Station Aalst — Deelnemer: <span className="font-medium">{name || "—"}</span></p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setEditPhotos(v => !v)} className={"text-sm px-3 py-1.5 rounded-lg border " + (editPhotos ? "border-indigo-400 bg-indigo-50" : "border-gray-300 hover:bg-gray-50")}>
+                  {editPhotos ? "Stop foto’s toewijzen" : "Foto’s toewijzen"}
+                </button>
+                <button onClick={onReset} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50">Reset</button>
+              </div>
+            </div>
+            <ProgressBar value={progress} total={total} />
+          </div>
+        </header>
+      );
+    }
+
+    function TeamRoles({ value, onChange }) {
+      const [roles, setRoles] = useState(value || { leider: "", voorlezer: "", secretaris: "", navigator: "" });
+      useEffect(() => onChange && onChange(roles), [roles]);
+      return (
+        <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+          <h2 className="text-lg font-semibold">Teamrollen</h2>
+          <p className="text-sm text-gray-700 mt-1">Vul (optioneel) jullie namen in:</p>
+          <div className="mt-3 grid sm:grid-cols-2 gap-3">
+            {Object.entries({ leider: "Leider", voorlezer: "Voorlezer", secretaris: "Secretaris", navigator: "Navigator" }).map(([k, label]) => (
+              <label key={k} className="text-sm">
+                <span className="block text-gray-700 mb-1">{label}</span>
+                <input className="w-full border border-gray-300 rounded-xl px-3 py-2" value={roles[k]} onChange={(e) => setRoles((r) => ({ ...r, [k]: e.target.value }))} placeholder={"Naam " + label.toLowerCase()} />
+              </label>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function Summary({ answers, roles, onRestart, steps }) {
+      const total = steps.filter((s) => s.question).length;
+      const answered = answers.filter((a) => a?.value && a.value.toString().trim() !== "").length;
+      return (
+        <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+          <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+            <h2 className="text-xl font-semibold">Samenvatting</h2>
+            <p className="text-sm text-gray-700 mt-1">{answered}/{total} vragen beantwoord.</p>
+            <div className="mt-4 overflow-hidden border border-gray-200 rounded-xl">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-left"><th className="p-2">#</th><th className="p-2">Locatie / Vraag</th><th className="p-2">Antwoord</th></tr>
+                </thead>
+                <tbody>
+                  {answers.map((a, idx) => {
+                    const s = steps[idx];
+                    return (
+                      <tr key={idx} className="border-t">
+                        <td className="p-2 align-top text-gray-600">{idx + 1}</td>
+                        <td className="p-2 align-top">{s?.title}<div className="text-xs text-gray-500">{s?.question}</div></td>
+                        <td className="p-2 align-top whitespace-pre-wrap">{a?.value || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4">
+              <button onClick={onRestart} className="px-4 py-2 rounded-xl border border-gray-300 hover:bg-gray-50">Opnieuw starten</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function NameGate({ onReady }) {
+      const [name, setName] = useState("");
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState(null);
+      const submit = async () => {
+        try {
+          setBusy(true);
+          setError(null);
+          const prevPid = localStorage.getItem(STORAGE_KEY + ":pid");
+          if (prevPid) { onReady(prevPid, name); return; }
+          const r = await api("/api/participants", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name })
+          });
+          if (!r.ok) throw new Error("Kon deelnemer niet aanmaken.");
+          const data = await r.json();
+          localStorage.setItem(STORAGE_KEY + ":pid", data.id);
+          localStorage.setItem(STORAGE_KEY + ":name", name);
+          onReady(data.id, name);
+        } catch (e) {
+          setError(e.message);
+        } finally {
+          setBusy(false);
+        }
+      };
+      return (
+        <div className="max-w-md mx-auto bg-white rounded-2xl shadow p-6 mt-16">
+          <h2 className="text-xl font-semibold">Welkom!</h2>
+          <p className="text-sm text-gray-700 mt-1">Vul je naam in om te starten.</p>
+          <input className="mt-3 w-full border rounded-xl px-3 py-2" placeholder="Naam of teamnaam" value={name} onChange={e=>setName(e.target.value)} />
+          {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
+          <button onClick={submit} disabled={!name || busy} className="mt-4 px-4 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60">
+            Starten
+          </button>
+        </div>
+      );
+    }
+
+    function AppInner() {
+      const [pid, setPid] = useState(localStorage.getItem(STORAGE_KEY + ":pid") || null);
+      const [name, setName] = useState(localStorage.getItem(STORAGE_KEY + ":name") || null);
+      const [idx, setIdx] = useState(0);
+      const [answers, setAnswers] = useState([]);
+      const [roles, setRoles] = useState(null);
+      const [photoMap, setPhotoMap] = useState({});
+      const [editPhotos, setEditPhotos] = useState(false);
+
+      // load server state on pid change
+      useEffect(() => {
+        (async () => {
+          if (!pid) return;
+          const r = await api(`/api/answers/${pid}`);
+          if (r.ok) {
+            const data = await r.json();
+            setAnswers(data.answers || []);
+            setRoles(data.roles || null);
+            setPhotoMap(data.photoMap || {});
+          } else {
+            // ignore (participant not found yet)
+          }
+        })();
+      }, [pid]);
+
+      // Debounced save to server
+      useDebouncedEffect(() => {
+        (async () => {
+          if (!pid) return;
+          await api(`/api/answers/${pid}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, answers, roles, photoMap })
+          });
+        })();
+      }, [answers, roles, photoMap, name, pid], 600);
+
+      const steps = useMemo(() => {
+        return STEPS.map((s) => ({ ...s, photos: photoMap[s.key] || [] }));
+      }, [photoMap]);
+
+      const step = steps[idx];
+      const totalSteps = steps.length;
+      const value = answers[idx]?.value || (step.type === "choice" ? "" : "");
+
+      const completedCount = answers.filter((a) => a?.value && a.value.toString().trim() !== "").length;
+
+      const onChange = (v) => {
+        setAnswers((old) => {
+          const copy = [...old];
+          copy[idx] = { id: step.id, value: v };
+          return copy;
+        });
+      };
+      const next = () => setIdx((i) => Math.min(i + 1, totalSteps - 1));
+      const prev = () => setIdx((i) => Math.max(i - 1, 0));
+      const reset = () => {
+        if (!confirm("Zeker dat je alles wil wissen (antwoorden + foto’s)?")) return;
+        setAnswers([]); setRoles(null); setPhotoMap({}); setIdx(0);
+        // ook op server flushen
+        api(`/api/answers/${pid}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, answers: [], roles: null, photoMap: {} }) });
+      };
+
+      const addPhotos = (urls) => {
+        const key = step.key;
+        setPhotoMap((old) => {
+          const cur = old[key] ? [...old[key]] : [];
+          return { ...old, [key]: [...cur, ...urls] };
+        });
+      };
+      const togglePhoto = (url) => {
+        const key = step.key;
+        setPhotoMap((old) => {
+          const cur = old[key] ? [...old[key]] : [];
+          const pos = cur.indexOf(url);
+          if (pos >= 0) cur.splice(pos, 1); else cur.push(url);
+          return { ...old, [key]: cur };
+        });
+      };
+      const reorderPhoto = (url, dir) => {
+        const key = step.key;
+        setPhotoMap((old) => {
+          const cur = old[key] ? [...old[key]] : [];
+          const pos = cur.indexOf(url);
+          if (pos >= 0) {
+            const newPos = Math.max(0, Math.min(cur.length - 1, pos + dir));
+            const [item] = cur.splice(pos, 1);
+            cur.splice(newPos, 0, item);
+          }
+          return { ...old, [key]: cur };
+        });
+      };
+
+      if (!pid) return <NameGate onReady={(id, nm) => { setPid(id); setName(nm); }} />;
+
+      const isLast = idx === totalSteps - 1;
+      const isStart = idx === 0;
+
+      return (
+        <div className="min-h-screen bg-gray-50">
+          <Header progress={completedCount} total={steps.filter((s) => s.question).length} onReset={reset} editPhotos={editPhotos} setEditPhotos={setEditPhotos} name={name} />
+          <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+            {isStart && (
+              <>
+                <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+                  <h2 className="text-lg font-semibold">Spelregels</h2>
+                  <ul className="mt-2 list-disc pl-5 space-y-1 text-sm text-gray-800">
+                    <li><span className="font-medium">Doe-het-zelf:</span> Net zoals bij examens: niet spieken. De toeristische medewerkers geven geen antwoorden op deze zoektocht.</li>
+                    <li><span className="font-medium">Loop geen marathon:</span> Dit is geen snelheidswedstrijd. Neem je tijd, kijk goed rond en wees voorzichtig.</li>
+                    <li><span className="font-medium">Teamspirit:</span> Werk samen. Kies een leider, voorlezer, secretaris (noteert) en navigator (weg zoeken).</li>
+                    <li><span className="font-medium">Instant oplossen:</span> Los elke opdracht meteen op en noteer je antwoord netjes.</li>
+                  </ul>
+                </div>
+                <TeamRoles value={roles} onChange={setRoles} />
+              </>
+            )}
+
+            <StepCard
+              step={step}
+              value={value}
+              onChange={onChange}
+              onNext={next}
+              onPrev={prev}
+              isLast={isLast}
+              displayIndex={idx}
+              editPhotos={editPhotos}
+              onAddPhotos={addPhotos}
+              onTogglePhoto={togglePhoto}
+              onReorderPhoto={reorderPhoto}
+            />
+
+            <div className="text-xs text-gray-500 text-center">
+              Tip: je voortgang (antwoorden + fotokoppelingen) wordt automatisch bewaard en naar de server gesynct.
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    function App() { return <AppInner />; }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
